@@ -42,7 +42,7 @@
 #include "gperftools/malloc_extension.h"
 #endif
 #include "base/file_util.h"
-#include "base/glog_wapper.h"
+#include "base/glog_wrapper.h"
 #include "base/hash.h"
 #include "base/proto_util.h"
 #include "base/status.h"
@@ -331,7 +331,8 @@ void TabletImpl::UpdateTTL(RpcController* ctrl, const ::openmldb::api::UpdateTTL
             if (index->GetTTLType() != ::openmldb::storage::TTLSt::ConvertTTLType(ttl.ttl_type())) {
                 response->set_code(::openmldb::base::ReturnCode::kTtlTypeMismatch);
                 response->set_msg("ttl type mismatch");
-                PDLOG(WARNING, "ttl type mismatch. tid %u, pid %u", tid, pid);
+                PDLOG(WARNING, "ttl type mismatch request type %d current type %d. tid %u, pid %u",
+                        ::openmldb::storage::TTLSt::ConvertTTLType(ttl.ttl_type()), index->GetTTLType(), tid, pid);
                 return;
             }
         }
@@ -766,16 +767,22 @@ void TabletImpl::Put(RpcController* controller, const ::openmldb::api::PutReques
         if (request->ts_dimensions_size() > 0) {
             entry.mutable_ts_dimensions()->CopyFrom(request->ts_dimensions());
         }
-        replicator->AppendEntry(entry);
-    } while (false);
 
-    ok = UpdateAggrs(request->tid(), request->pid(), request->value(),
-                     request->dimensions(), entry.log_index());
-    if (!ok) {
-        response->set_code(::openmldb::base::ReturnCode::kError);
-        response->set_msg("update aggr failed");
-        return;
-    }
+        // Aggregator update assumes that binlog_offset is strictly increasing
+        // so the update should be protected within the replicator lock
+        // in case there will be other Put jump into the middle
+        auto update_aggr = [this, &request, &ok, &entry]() {
+            ok = UpdateAggrs(request->tid(), request->pid(), request->value(),
+                               request->dimensions(), entry.log_index());
+        };
+        UpdateAggrClosure closure(update_aggr);
+        replicator->AppendEntry(entry, &closure);
+        if (!ok) {
+            response->set_code(::openmldb::base::ReturnCode::kError);
+            response->set_msg("update aggr failed");
+            return;
+        }
+    } while (false);
 
     uint64_t end_time = ::baidu::common::timer::get_micros();
     if (start_time + FLAGS_put_slow_log_threshold < end_time) {
@@ -1557,6 +1564,26 @@ void TabletImpl::Delete(RpcController* controller, const ::openmldb::api::Delete
         response->set_msg("delete failed");
         return;
     }
+
+    // delete the entries from pre-aggr table
+    auto aggrs = GetAggregators(request->tid(), request->pid());
+    if (aggrs) {
+        for (const auto& aggr : *aggrs) {
+            if (aggr->GetIndexPos() != idx) {
+                continue;
+            }
+            auto ok = aggr->Delete(request->key());
+            if (!ok) {
+                PDLOG(WARNING,
+                      "delete from aggr failed. base table: tid[%u] pid[%u] index[%u] key[%s]. aggr table: tid[%u]",
+                      request->tid(), request->pid(), idx, request->key().c_str(), aggr->GetAggrTid());
+                response->set_code(::openmldb::base::ReturnCode::kDeleteFailed);
+                response->set_msg("delete from associated pre-aggr table failed");
+                return;
+            }
+        }
+    }
+
     std::shared_ptr<LogReplicator> replicator;
     do {
         replicator = GetReplicator(request->tid(), request->pid());
@@ -3121,16 +3148,17 @@ int TabletImpl::LoadDiskTableInternal(uint32_t tid, uint32_t pid, const ::openml
         std::string manifest_file = snapshot_path + "MANIFEST";
         if (Snapshot::GetLocalManifest(manifest_file, manifest) == 0) {
             std::string snapshot_dir = snapshot_path + manifest.name();
-            PDLOG(INFO, "rename dir %s to %s. tid %u pid %u", snapshot_dir.c_str(), data_path.c_str(), tid, pid);
-            if (!::openmldb::base::Rename(snapshot_dir, data_path)) {
-                PDLOG(WARNING, "rename dir failed. tid %u pid %u path %s", tid, pid, snapshot_dir.c_str());
-                break;
+            if (::openmldb::base::IsExists(snapshot_dir)) {
+                PDLOG(INFO, "hardlink dir %s to %s (tid %u pid %u)", snapshot_dir.c_str(), data_path.c_str(), tid, pid);
+                if (::openmldb::base::HardLinkDir(snapshot_dir, data_path)) {
+                    PDLOG(WARNING, "hardlink snapshot dir %s to data dir failed (tid %u pid %u)", snapshot_dir.c_str(),
+                          tid, pid);
+                    break;
+                }
+                snapshot_offset = manifest.offset();
+            } else {
+                PDLOG(WARNING, "snapshot_dir %s with tid %u pid %u not exists", snapshot_dir.c_str(), tid, pid);
             }
-            if (unlink(manifest_file.c_str()) < 0) {
-                PDLOG(WARNING, "remove manifest failed. tid %u pid %u path %s", tid, pid, manifest_file.c_str());
-                break;
-            }
-            snapshot_offset = manifest.offset();
         }
         std::string msg;
         if (CreateTableInternal(&table_meta, msg) < 0) {
@@ -3178,7 +3206,6 @@ int TabletImpl::LoadDiskTableInternal(uint32_t tid, uint32_t pid, const ::openml
             task_pool_.DelayTask(FLAGS_binlog_delete_interval,
                                  boost::bind(&TabletImpl::SchedDelBinlog, this, tid, pid));
             PDLOG(INFO, "load table success. tid %u pid %u", tid, pid);
-            MakeSnapshotInternal(tid, pid, 0, std::shared_ptr<::openmldb::api::TaskInfo>());
             std::string old_data_path = table_path + "/old_data";
             if (::openmldb::base::IsExists(old_data_path)) {
                 if (!::openmldb::base::RemoveDir(old_data_path)) {
@@ -3191,6 +3218,8 @@ int TabletImpl::LoadDiskTableInternal(uint32_t tid, uint32_t pid, const ::openml
                 task_ptr->set_status(::openmldb::api::TaskStatus::kDone);
                 return 0;
             }
+            PDLOG(INFO, "Recover table with tid %u and pid %u from binlog offset %u to %u", tid, pid, snapshot_offset,
+                  latest_offset);
         } else {
             DeleteTableInternal(tid, pid, std::shared_ptr<::openmldb::api::TaskInfo>());
         }
@@ -4136,7 +4165,7 @@ bool TabletImpl::UpdateAggrs(uint32_t tid, uint32_t pid, const std::string& valu
         return true;
     }
     for (auto iter = dimensions.begin(); iter != dimensions.end(); ++iter) {
-        for (auto aggr : *aggrs) {
+        for (const auto& aggr : *aggrs) {
             if (aggr->GetIndexPos() != iter->idx()) {
                 continue;
             }
@@ -4384,6 +4413,8 @@ bool TabletImpl::RefreshAggrCatalog() {
         table_info.order_by_col.assign(str, len);
         row_view.GetValue(row.buf(), 8, &str, &len);
         table_info.bucket_size.assign(str, len);
+        row_view.GetValue(row.buf(), 9, &str, &len);
+        table_info.filter_col.assign(str, len);
 
         table_infos.emplace_back(std::move(table_info));
         it->Next();

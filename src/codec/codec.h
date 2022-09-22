@@ -17,17 +17,12 @@
 #ifndef SRC_CODEC_CODEC_H_
 #define SRC_CODEC_CODEC_H_
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include <map>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/endianconv.h"
 #include "base/strings.h"
 #include "proto/common.pb.h"
 
@@ -41,13 +36,9 @@ static constexpr uint8_t SIZE_LENGTH = 4;
 static constexpr uint8_t HEADER_LENGTH = VERSION_LENGTH + SIZE_LENGTH;
 static constexpr uint32_t UINT24_MAX = (1 << 24) - 1;
 
-struct RowContext;
 class RowBuilder;
 class RowView;
 class RowProject;
-
-// TODO(wangtaize) share the row codec context
-struct RowContext {};
 
 class RowProject {
  public:
@@ -122,6 +113,8 @@ class RowBuilder {
     void SetSchemaVersion(uint8_t version);
     inline bool IsComplete() { return cnt_ == (uint32_t)schema_.size(); }
     inline uint32_t GetAppendPos() { return cnt_; }
+
+    static bool ConvertDate(uint32_t year, uint32_t month, uint32_t day, uint32_t* val);
 
  private:
     bool Check(uint32_t index, ::openmldb::type::DataType type);
@@ -201,27 +194,6 @@ class RowView {
 
 namespace v1 {
 
-static constexpr uint8_t VERSION_LENGTH = 2;
-static constexpr uint8_t SIZE_LENGTH = 4;
-// calc the total row size with primary_size, str field count and str_size
-inline uint32_t CalcTotalLength(uint32_t primary_size, uint32_t str_field_cnt, uint32_t str_size,
-                                uint32_t* str_addr_space) {
-    uint32_t total_size = primary_size + str_size;
-    if (total_size + str_field_cnt <= UINT8_MAX) {
-        *str_addr_space = 1;
-        return total_size + str_field_cnt;
-    } else if (total_size + str_field_cnt * 2 <= UINT16_MAX) {
-        *str_addr_space = 2;
-        return total_size + str_field_cnt * 2;
-    } else if (total_size + str_field_cnt * 3 <= 1 << 24) {
-        *str_addr_space = 3;
-        return total_size + str_field_cnt * 3;
-    } else {
-        *str_addr_space = 4;
-        return total_size + str_field_cnt * 4;
-    }
-}
-
 inline int8_t GetAddrSpace(uint32_t size) {
     if (size <= UINT8_MAX) {
         return 1;
@@ -266,13 +238,6 @@ int32_t GetCol(int8_t* input, int32_t offset, int32_t type_id, int8_t* data);
 int32_t GetStrCol(int8_t* input, int32_t str_field_offset, int32_t next_str_field_offset, int32_t str_start_offset,
                   int32_t type_id, int8_t* data);
 }  // namespace v1
-
-inline std::string Int64ToString(const int64_t key) {
-    std::stringstream ss;
-    ss << std::hex << key;
-    std::string key_str = ss.str();
-    return key_str;
-}
 
 }  // namespace codec
 }  // namespace openmldb

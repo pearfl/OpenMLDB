@@ -69,6 +69,11 @@ public class SqlClusterExecutor implements SqlExecutor {
             sqlOpt.setZk_path(option.getZkPath());
             sqlOpt.setEnable_debug(option.getEnableDebug());
             sqlOpt.setRequest_timeout(option.getRequestTimeout());
+            sqlOpt.setSpark_conf_path(option.getSparkConfPath());
+            sqlOpt.setZk_log_level(option.getZkLogLevel());
+            sqlOpt.setZk_log_file(option.getZkLogFile());
+            sqlOpt.setGlog_level(option.getGlogLevel());
+            sqlOpt.setGlog_dir(option.getGlogDir());
             this.sqlRouter = sql_router_sdk.NewClusterSQLRouter(sqlOpt);
             sqlOpt.delete();
         } else {
@@ -77,6 +82,8 @@ public class SqlClusterExecutor implements SqlExecutor {
             sqlOpt.setRequest_timeout(option.getRequestTimeout());
             sqlOpt.setHost(option.getHost());
             sqlOpt.setPort(option.getPort());
+            sqlOpt.setGlog_level(option.getGlogLevel());
+            sqlOpt.setGlog_dir(option.getGlogDir());
             this.sqlRouter = sql_router_sdk.NewStandaloneSQLRouter(sqlOpt);
             sqlOpt.delete();
         }
@@ -176,6 +183,11 @@ public class SqlClusterExecutor implements SqlExecutor {
     @Override
     public PreparedStatement getInsertPreparedStmt(String db, String sql) throws SQLException {
         return new InsertPreparedStatementImpl(db, sql, this.sqlRouter);
+    }
+
+    @Override
+    public PreparedStatement getDeletePreparedStmt(String db, String sql) throws SQLException {
+        return new DeletePreparedStatementImpl(db, sql, this.sqlRouter);
     }
 
     @Override

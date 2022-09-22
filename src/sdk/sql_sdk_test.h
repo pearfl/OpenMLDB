@@ -18,7 +18,7 @@
 #define SRC_SDK_SQL_SDK_TEST_H_
 
 #include <string>
-#include "base/glog_wapper.h"
+#include "base/glog_wrapper.h"
 #include "sdk/sql_sdk_base_test.h"
 
 namespace openmldb {
@@ -103,6 +103,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     UdafQuery, SQLSDKQueryTest,
     testing::ValuesIn(SQLSDKQueryTest::InitCases("/cases/query/udaf_query.yaml")));
+INSTANTIATE_TEST_SUITE_P(
+    LimitClauseQuery, SQLSDKQueryTest,
+    testing::ValuesIn(SQLSDKQueryTest::InitCases("/cases/query/limit.yaml")));
 
 // Test Fz DDL
 INSTANTIATE_TEST_SUITE_P(SQLSDKTestFzBank, SQLSDKQueryTest,
@@ -143,6 +146,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     SQLSDKTestWindow, SQLSDKQueryTest,
     testing::ValuesIn(SQLSDKQueryTest::InitCases("/cases/function/window/test_window.yaml")));
+INSTANTIATE_TEST_SUITE_P(
+    SQLSDKTestWindowAttributes, SQLSDKQueryTest,
+    testing::ValuesIn(SQLSDKQueryTest::InitCases("/cases/function/window/window_attributes.yaml")));
 INSTANTIATE_TEST_SUITE_P(
     SQLSDKTestWindowExcludeCurrentTime, SQLSDKQueryTest,
     testing::ValuesIn(SQLSDKQueryTest::InitCases("/cases/function/window/test_window_exclude_current_time.yaml")));

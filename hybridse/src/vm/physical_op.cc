@@ -89,6 +89,13 @@ void printOptionsMap(std::ostream &output, const node::OptionsMap* value, const 
     }
 }
 
+template<typename T>
+void PrintOptional(std::ostream& output, const absl::string_view key_name, const std::optional<T>& val) {
+    if (val.has_value()) {
+        output << ", " << key_name << "=" << val.value();
+    }
+}
+
 void PhysicalOpNode::Print(std::ostream& output, const std::string& tab) const {
     output << tab << PhysicalOpTypeName(type_);
 }
@@ -129,8 +136,8 @@ void PhysicalUnaryNode::PrintChildren(std::ostream& output, const std::string& t
 }
 void PhysicalUnaryNode::Print(std::ostream& output, const std::string& tab) const {
     PhysicalOpNode::Print(output, tab);
-    if (limit_cnt_ > 0) {
-        output << "(limit=" << limit_cnt_ << ")";
+    if (limit_cnt_ .has_value()) {
+        output << "(limit=" << limit_cnt_.value() << ")";
     }
     output << "\n";
     PrintChildren(output, tab);
@@ -251,9 +258,7 @@ Status ColumnProjects::ReplaceExpr(const passes::ExprReplacer& replacer, node::N
 void PhysicalProjectNode::Print(std::ostream& output, const std::string& tab) const {
     PhysicalOpNode::Print(output, tab);
     output << "(type=" << ProjectTypeName(project_type_);
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -440,7 +445,8 @@ Status PhysicalProjectNode::WithNewChildren(node::NodeManager* nm, const std::ve
                 CHECK_STATUS(having_condition.ReplaceExpr(having_replacer, nm, &new_having_condition));
             }
 
-            op = new PhysicalAggregationNode(children[0], new_projects, new_having_condition.condition());
+            auto* agg_prj = new PhysicalAggregationNode(children[0], new_projects, new_having_condition.condition());
+            op = agg_prj;
             break;
         }
         case kGroupAggregation: {
@@ -541,9 +547,7 @@ void PhysicalSimpleProjectNode::Print(std::ostream& output, const std::string& t
         }
     }
     output << ")";
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
 
     output << "\n";
@@ -568,9 +572,7 @@ void PhysicalAggregationNode::Print(std::ostream& output,
     if (having_condition_.ValidCondition()) {
         output << ", having_" << having_condition_.ToString();
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -605,9 +607,7 @@ void PhysicalReduceAggregationNode::Print(std::ostream& output,
     if (having_condition_.ValidCondition()) {
         output << ", having_" << having_condition_.ToString();
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -621,9 +621,7 @@ void PhysicalGroupAggrerationNode::Print(std::ostream& output,
     if (having_condition_.ValidCondition()) {
         output << ", having_" << having_condition_.ToString();
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -736,15 +734,16 @@ void PhysicalWindowAggrerationNode::Print(std::ostream& output, const std::strin
     if (exclude_current_time_) {
         output << ", EXCLUDE_CURRENT_TIME";
     }
+    if (exclude_current_row_) {
+        output << ", EXCLUDE_CURRENT_ROW";
+    }
     if (instance_not_in_window_) {
         output << ", INSTANCE_NOT_IN_WINDOW";
     }
     if (need_append_input()) {
         output << ", NEED_APPEND_INPUT";
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")\n";
 
     output << tab << INDENT << "+-WINDOW(" << window_.ToString() << ")";
@@ -823,9 +822,7 @@ void PhysicalJoinNode::Print(std::ostream& output, const std::string& tab) const
     } else {
         output << join_.ToString();
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -902,9 +899,7 @@ Status PhysicalSortNode::WithNewChildren(node::NodeManager* nm, const std::vecto
 void PhysicalSortNode::Print(std::ostream& output, const std::string& tab) const {
     PhysicalOpNode::Print(output, tab);
     output << "(" << sort_.ToString();
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -920,7 +915,7 @@ Status PhysicalDistinctNode::WithNewChildren(node::NodeManager* nm, const std::v
 Status PhysicalLimitNode::WithNewChildren(node::NodeManager* nm, const std::vector<PhysicalOpNode*>& children,
                                           PhysicalOpNode** out) {
     CHECK_TRUE(children.size() == 1, common::kPlanError);
-    auto new_limit_op = nm->RegisterNode(new PhysicalLimitNode(children[0], limit_cnt_));
+    auto new_limit_op = nm->RegisterNode(new PhysicalLimitNode(children[0], limit_cnt_.value()));
     new_limit_op->SetLimitOptimized(limit_optimized_);
     *out = new_limit_op;
     return Status::OK();
@@ -928,7 +923,8 @@ Status PhysicalLimitNode::WithNewChildren(node::NodeManager* nm, const std::vect
 
 void PhysicalLimitNode::Print(std::ostream& output, const std::string& tab) const {
     PhysicalOpNode::Print(output, tab);
-    output << "(limit=" << std::to_string(limit_cnt_) << (limit_optimized_ ? ", optimized" : "") << ")";
+    output << "(limit=" << (!limit_cnt_.has_value() ? "null" : std::to_string(limit_cnt_.value()))
+           << (limit_optimized_ ? ", optimized" : "") << ")";
     output << "\n";
     PrintChildren(output, tab);
 }
@@ -968,9 +964,7 @@ Status PhysicalFilterNode::WithNewChildren(node::NodeManager* nm, const std::vec
 void PhysicalFilterNode::Print(std::ostream& output, const std::string& tab) const {
     PhysicalOpNode::Print(output, tab);
     output << "(" << filter_.ToString();
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);
@@ -1195,6 +1189,7 @@ Status PhysicalRequestUnionNode::WithNewChildren(node::NodeManager* nm, const st
     CHECK_TRUE(children.size() == 2, common::kPlanError);
     auto new_union_op = new PhysicalRequestUnionNode(children[0], children[1], window_, instance_not_in_window_,
                                                      exclude_current_time_, output_request_row_);
+    new_union_op->exclude_current_row_ = exclude_current_row_;
 
     std::vector<const node::ExprNode*> depend_columns;
     window_.ResolvedRelatedColumns(&depend_columns);
@@ -1223,6 +1218,12 @@ void PhysicalRequestUnionNode::Print(std::ostream& output, const std::string& ta
     }
     if (exclude_current_time_) {
         output << "EXCLUDE_CURRENT_TIME, ";
+    }
+    if (exclude_current_row_) {
+        output << "EXCLUDE_CURRENT_ROW, ";
+    }
+    if (instance_not_in_window_) {
+        output << "INSTANCE_NOT_IN_WINDOW, ";
     }
     output << window_.ToString() << ")";
     if (!window_unions_.Empty()) {
@@ -1332,9 +1333,7 @@ void PhysicalRequestJoinNode::Print(std::ostream& output, const std::string& tab
     } else {
         output << join_.ToString();
     }
-    if (limit_cnt_ > 0) {
-        output << ", limit=" << limit_cnt_;
-    }
+    PrintOptional(output, "limit", limit_cnt_);
     output << ")";
     output << "\n";
     PrintChildren(output, tab);

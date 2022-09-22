@@ -79,7 +79,7 @@ __attribute__((unused)) static void PrintSchema(
 
     for (int i = 0; i < added_column_desc.size(); i++) {
         const auto& column = added_column_desc.Get(i);
-        t.add(std::to_string(i + 1));
+        t.add(std::to_string(column_desc.size() + i + 1));
         t.add(column.name());
         // kXXX discard k
         t.add(DataType_Name(column.data_type()).substr(1));
@@ -611,7 +611,7 @@ __attribute__((unused)) static void PrintProcedureSchema(const std::string& head
             const auto& column = schema.Get(i);
             t.add(std::to_string(i + 1));
             t.add(column.name());
-            t.add(::hybridse::type::Type_Name(column.type()));
+            t.add(::hybridse::type::Type_Name(column.type()).substr(1));
             t.add(column.is_constant() ? "YES" : "NO");
             t.end_of_row();
         }
